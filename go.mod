@@ -2,4 +2,4 @@ module github.com/tinywasm/jsvalue
 
 go 1.22
 
-require github.com/tinywasm/fmt v0.23.4
+require github.com/tinywasm/fmt v0.23.5
