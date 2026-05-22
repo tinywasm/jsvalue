@@ -34,9 +34,3 @@ func TestUint8ArrayClass_defined(t *testing.T) {
 	}
 }
 
-func TestAwaitRequest_success(t *testing.T) {
-	// IDBKeyRange.only() is a lightweight IDB API available in all WASM envs.
-	// For a pure channel/callback test without an actual DB, use a resolved Promise
-	// wrapped as a fake request — or skip and note that indexdb integration tests cover this.
-	t.Skip("covered by tinywasm/indexdb integration tests")
-}
