@@ -141,7 +141,7 @@ func TestToGo(t *testing.T) {
 		if err := ToGo(val, &res); err != nil {
 			t.Fatal(err)
 		}
-		if int(res["x"].(float64)) != 10 { // JS numbers are floats
+		if int(res["x"].(int64)) != 10 { // JS numbers are floats
 			t.Errorf("map mismatch x: %v", res["x"])
 		}
 		if res["y"] != "z" {
@@ -392,7 +392,67 @@ func TestValueToGoCoverage(t *testing.T) {
 	if list[0] != false {
 		t.Errorf("list bool mismatch")
 	}
-	if list[1] != 42.0 { // JS numbers are floats
+	if list[1] != int64(42) { // JS numbers are floats
 		t.Errorf("list num mismatch")
+	}
+}
+
+func TestScanValue(t *testing.T) {
+	var s string
+	if err := ScanValue(js.ValueOf("hello"), &s); err != nil || s != "hello" {
+		t.Fatalf("string: got %q err %v", s, err)
+	}
+	var i int
+	if err := ScanValue(js.ValueOf(42), &i); err != nil || i != 42 {
+		t.Fatalf("int: got %d err %v", i, err)
+	}
+	var i64 int64
+	if err := ScanValue(js.ValueOf(99), &i64); err != nil || i64 != 99 {
+		t.Fatalf("int64: got %d err %v", i64, err)
+	}
+	var f float64
+	if err := ScanValue(js.ValueOf(3.14), &f); err != nil || f != 3.14 {
+		t.Fatalf("float64: got %f err %v", f, err)
+	}
+	var b bool
+	if err := ScanValue(js.ValueOf(true), &b); err != nil || !b {
+		t.Fatalf("bool: got %v err %v", b, err)
+	}
+	err := ScanValue(js.ValueOf(1), new(int8))
+	if err == nil {
+		t.Fatal("expected error for unsupported type *int8")
+	}
+}
+
+func TestToAny(t *testing.T) {
+	if v := ToAny(js.Null()); v != nil {
+		t.Fatalf("null: got %v", v)
+	}
+	if v := ToAny(js.ValueOf("hi")); v != "hi" {
+		t.Fatalf("string: got %v", v)
+	}
+	if v := ToAny(js.ValueOf(7)); v != int64(7) {
+		t.Fatalf("int: got %T(%v)", v, v)
+	}
+	if v := ToAny(js.ValueOf(1.5)); v != 1.5 {
+		t.Fatalf("float: got %T(%v)", v, v)
+	}
+	if v := ToAny(js.ValueOf(true)); v != true {
+		t.Fatalf("bool: got %v", v)
+	}
+}
+
+func TestScanValue_Bytes(t *testing.T) {
+	ua := js.Global().Get("Uint8Array").New(3)
+	ua.SetIndex(0, 10)
+	ua.SetIndex(1, 20)
+	ua.SetIndex(2, 30)
+
+	var b []byte
+	if err := ScanValue(ua, &b); err != nil {
+		t.Fatalf("ScanValue failed: %v", err)
+	}
+	if len(b) != 3 || b[0] != 10 || b[1] != 20 || b[2] != 30 {
+		t.Fatalf("got %v", b)
 	}
 }
