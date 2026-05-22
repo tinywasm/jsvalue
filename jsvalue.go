@@ -143,7 +143,7 @@ func ToGo(jsVal js.Value, v any) error {
 	// Basic implementation - extend as needed
 	switch ptr := v.(type) {
 	case *any:
-		*ptr = toAny(jsVal)
+		*ptr = ToAny(jsVal)
 	case *map[string]any:
 		if *ptr == nil {
 			*ptr = make(map[string]any)
@@ -152,7 +152,7 @@ func ToGo(jsVal js.Value, v any) error {
 		length := keys.Length()
 		for i := 0; i < length; i++ {
 			key := keys.Index(i).String()
-			(*ptr)[key] = toAny(jsVal.Get(key))
+			(*ptr)[key] = ToAny(jsVal.Get(key))
 		}
 	case *[]any:
 		length := jsVal.Length()
@@ -162,7 +162,7 @@ func ToGo(jsVal js.Value, v any) error {
 			*ptr = (*ptr)[:length]
 		}
 		for i := 0; i < length; i++ {
-			(*ptr)[i] = toAny(jsVal.Index(i))
+			(*ptr)[i] = ToAny(jsVal.Index(i))
 		}
 	case *string:
 		*ptr = jsVal.String()
@@ -282,36 +282,71 @@ func ToGo(jsVal js.Value, v any) error {
 	return nil
 }
 
-// toAny recursively converts a js.Value to a Go any type.
-// It is used when the target Go type is interface{} (any).
-func toAny(jsVal js.Value) any {
-	switch jsVal.Type() {
+
+// ScanValue copies the JS value v into the Go pointer dest.
+// Supports *string, *int, *int64, *int32, *float64, *bool, *[]byte, *any.
+// []byte is read from a Uint8Array via js.CopyBytesToGo.
+func ScanValue(v js.Value, dest any) error {
+	switch p := dest.(type) {
+	case *string:
+		*p = v.String()
+	case *int:
+		*p = v.Int()
+	case *int64:
+		*p = int64(v.Float())
+	case *int32:
+		*p = int32(v.Int())
+	case *float64:
+		*p = v.Float()
+	case *bool:
+		*p = v.Bool()
+	case *[]byte:
+		ua := Uint8ArrayClass.New(v)
+		b := make([]byte, ua.Length())
+		js.CopyBytesToGo(b, ua)
+		*p = b
+	case *any:
+		*p = ToAny(v)
+	default:
+		return Errf("jsvalue: unsupported scan type: %T", dest)
+	}
+	return nil
+}
+
+// ToAny converts a JS value to a Go any.
+// Integer numbers are returned as int64; non-integer numbers as float64.
+func ToAny(v js.Value) any {
+	switch v.Type() {
 	case js.TypeNull, js.TypeUndefined:
 		return nil
 	case js.TypeBoolean:
-		return jsVal.Bool()
+		return v.Bool()
 	case js.TypeNumber:
-		return jsVal.Float()
+		f := v.Float()
+		if f == float64(int64(f)) {
+			return int64(f)
+		}
+		return f
 	case js.TypeString:
-		return jsVal.String()
+		return v.String()
 	case js.TypeObject:
-		if jsVal.InstanceOf(jsArray) {
-			length := jsVal.Length()
+		if v.InstanceOf(jsArray) {
+			length := v.Length()
 			arr := make([]any, length)
 			for i := 0; i < length; i++ {
-				arr[i] = toAny(jsVal.Index(i))
+				arr[i] = ToAny(v.Index(i))
 			}
 			return arr
 		}
 		obj := make(map[string]any)
-		keys := jsObject.Call("keys", jsVal)
+		keys := jsObject.Call("keys", v)
 		length := keys.Length()
 		for i := 0; i < length; i++ {
 			key := keys.Index(i).String()
-			obj[key] = toAny(jsVal.Get(key))
+			obj[key] = ToAny(v.Get(key))
 		}
 		return obj
 	default:
-		return jsVal.String()
+		return v.String()
 	}
 }
