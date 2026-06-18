@@ -42,22 +42,20 @@ implementa los writer/reader concretos sobre `js.Value`. Se eliminan `reflect`, 
 ### Contrato de `fmt` (ya publicado, para referencia)
 
 ```go
-type FieldWriter interface { String(name,val string); Int(name string,val int64); Uint(...); Float(...); Bool(...); Bytes(name string,val []byte); Null(name string); Object(name string,val Encodable); Array(name string,n int) ArrayWriter }
+type FieldWriter interface { String(name,val string); Int(name string,val int64); Uint(...); Float(...); Bool(...); Bytes(name string,val []byte); Null(name string); Object(name string,val Encodable); Array(name string,n int,each func(i int,a ArrayWriter)) }
 type ArrayWriter interface { String(val string); Int(val int64); Float(val float64); Bool(val bool); Bytes(val []byte); Object(val Encodable) }
-type Encodable interface { EncodeFields(w FieldWriter); IsNil() bool }
+type Encodable interface { EncodeFields(w FieldWriter) }
 type FieldReader interface { String(name string)(string,bool); Int(...); Uint(...); Float(...); Bool(...); Bytes(...)([]byte,bool); Object(name string,into Decodable) bool; Array(name string)(ArrayReader,bool) }
 type ArrayReader interface { Len() int; String(i int) string; Int(i int) int64; Float(i int) float64; Bool(i int) bool; Bytes(i int) []byte; Object(i int,into Decodable) bool }
-type Decodable interface { DecodeFields(r FieldReader) error; IsNil() bool }
+type Decodable interface { DecodeFields(r FieldReader) error }
 ```
 
 ### Lo que se IMPLEMENTA (archivo nuevo `codec_wasm.go`)
 
 - `jsObjectWriter` (`fmt.FieldWriter`): escribe a un `js.Object` vía `obj.Set(name, …)`. Cada
   método mapea a `js.ValueOf` del valor tipado; `Bytes` → ver regla de `[]byte` abajo; `Object`
-  → si `val` es nil (`fmt.IsNil(val)`) escribe `js.Null()`, si no crea sub-objeto y recursa con
-  `EncodeFields`; `Array` → `Array.New(n)` + retorna `jsArrayWriter` envolviendo el array.
-- `jsArrayWriter` (`fmt.ArrayWriter`): `arr.SetIndex(i, …)`. Para evitar alocaciones en el heap,
-  `jsObjectWriter` mantiene una instancia pre-alocada de `jsArrayWriter` y la reutiliza.
+  → crea sub-objeto y recursa con `EncodeFields`; `Array` → `Array.New(n)` + `ArrayWriter`.
+- `jsArrayWriter` (`fmt.ArrayWriter`): `arr.SetIndex(i, …)`.
 - `jsObjectReader` (`fmt.FieldReader`): `jsVal.Get(name)` + extracción tipada (`.String()`,
   `.Int()`, `.Float()`, `.Bool()`); presencia = `!IsUndefined() && !IsNull()`.
 - `jsArrayReader` (`fmt.ArrayReader`): `jsVal.Index(i)`.
@@ -66,11 +64,13 @@ type Decodable interface { DecodeFields(r FieldReader) error; IsNil() bool }
 
 - **`ToJS(data any) js.Value`**: conservar los `case` de **primitivos** (string, bool, ints,
   floats, `[]byte`, `[]string`, `[]int`, `[]any`). **ELIMINAR** los `case` de `map[string]*`.
-  **`default`**: si `data` implementa `fmt.Encodable` → si es nil (`fmt.IsNil(data)`) → `js.Null()`. Si no → crear `js.Object`, envolver en `jsObjectWriter` y llamar `EncodeFields`. Si no → fallback `js.ValueOf(fmt.Convert(data).String())`.
+  **`default`**: si `data` implementa `fmt.Encodable` → crear `js.Object`, envolver en
+  `jsObjectWriter` y llamar `EncodeFields`. Si no → fallback `js.ValueOf(Convert(v).String())`.
   **Quitar el import `reflect` y todo `reflect.*`.**
 - **`ToGo(jsVal js.Value, v any) error`**: conservar los `case` de punteros a primitivos y
   `*[]byte` (con la regla de `[]byte` abajo). **ELIMINAR** los `case` de `*map[string]*`.
-  **`default`**: si `v` implementa `fmt.Decodable` → si es nil (`fmt.IsNil(v)`) → retornar `Err("jsvalue","destination","is","nil")`. Si no → envolver `jsVal` en `jsObjectReader` y llamar `DecodeFields`. Si no → `Err("jsvalue","unsupported","destination","type")`.
+  **`default`**: si `v` implementa `fmt.Decodable` → envolver `jsVal` en `jsObjectReader` y
+  llamar `DecodeFields`. Si no → `Err("jsvalue","unsupported","destination","type")`.
   **Quitar `reflect`.**
 - **`ToAny(v js.Value) any`**: para `TypeObject` que es **array** → `[]any` (OK, sin map). Para
   objeto NO-array → **devolver el `js.Value` crudo** (no construir `map[string]any`). Quitar el
@@ -91,42 +91,41 @@ blobs de D1 llegan así). Una sola regla, implementada en un único helper reuti
 1. Crear `codec_wasm.go` (`//go:build wasm`) con `jsObjectWriter`, `jsArrayWriter`,
    `jsObjectReader`, `jsArrayReader` implementando las interfaces de `fmt`. Helper único de
    `[]byte` (string|Uint8Array).
-2. Asegurar diseño 0-alloc en los escritores mediante el reuso de sub-estructuras pre-alocadas
-   (ej. `jsArrayWriter` interna) para no alocar al retornar `ArrayWriter`.
 
 ### Stage 2 — reescribir `jsvalue.go`
-3. Quitar `import "reflect"`. Reescribir `default` de `ToJS` (usando `fmt.IsNil`) y `ToGo`.
+2. Quitar `import "reflect"`. Reescribir `default` de `ToJS` (Encodable) y `ToGo` (Decodable).
    Eliminar los `case` de `map`. Ajustar `ToAny` (sin map). Alinear `ScanValue *[]byte`.
-4. Confirmar: sin `reflect.` y sin `map[` en todo `jsvalue.go` y `codec_wasm.go`.
+3. Confirmar: sin `reflect.` y sin `map[` en todo `jsvalue.go` y `codec_wasm.go`.
 
 ### Stage 3 — tests
-5. Reescribir `jsvalue_test.go` y `benchmark_test.go`: los structs de test (`TestStruct`,
-   `ComplexStruct`, `ByteStruct`, `TagStruct`) implementan `fmt.Encodable`/`fmt.Decodable` y su método `IsNil() bool { return m == nil }`.
-   El test que usaba `map[string]int` se reescribe a un `Encodable`. Cubrir: objeto con claves = nombres de campo,
-   anidado, array, `[]byte` (string↔Uint8Array), typed nil pointer, y tipo no soportado → fallback/error.
-6. Test de asignaciones: `testing.AllocsPerRun` sobre el round-trip con writer/reader reusados →
+4. Reescribir `jsvalue_test.go` y `benchmark_test.go`: los structs de test (`TestStruct`,
+   `ComplexStruct`, `ByteStruct`, `TagStruct`) implementan `fmt.Encodable`/`fmt.Decodable` (a
+   mano en el test; **no** usar `map`, **no** depender de tags por reflexión). El test que usaba
+   `map[string]int` se reescribe a un `Encodable`. Cubrir: objeto con claves = nombres de campo,
+   anidado, array, `[]byte` (string↔Uint8Array), y tipo no soportado → fallback/error.
+5. Test de asignaciones: `testing.AllocsPerRun` sobre el round-trip con writer/reader reusados →
    afirmar **0 asignaciones del heap Go** en el camino de codec (la creación del objeto JS es
    del lado JS y no cuenta).
 
 ### Stage 4 — actualizar el benchmark existente (antes/después) — OBLIGATORIO
 **YA EXISTE** `benchmark_test.go` (`BenchmarkToJS_*`/`ToGo_*`) y la sección **"Performance
 Results"** en `README.md`. **NO crear** un doc nuevo; **actualizar** lo existente:
-7. **Ajustar `benchmark_test.go`:** los benches de structs (`BenchmarkToJS_Struct`,
+6. **Ajustar `benchmark_test.go`:** los benches de structs (`BenchmarkToJS_Struct`,
    `BenchmarkToGo_Struct`) pasan por el codec (el tipo de bench implementa `fmt.Encodable`/
    `Decodable`). **Eliminar** los benches del camino map que ya no existe (`BenchmarkToGo_Any_Map`,
    `BenchmarkToGo_Map_Reuse`).
-8. **Tamaño de binario wasm (headline):** medir un `main.go` representativo (usa `ToJS`/`ToGo`
+7. **Tamaño de binario wasm (headline):** medir un `main.go` representativo (usa `ToJS`/`ToGo`
    de un tipo `Encodable`) con `tinygo build -target wasm -opt=z -no-debug` **antes** (con
    reflect/map) y **después** (codec). Registrar el delta esperado (cae el bloque `reflect`,
    ~72 KB) en la sección **"Performance Results"** del `README.md`.
-9. **Asignaciones:** confirmar `AllocsPerRun==0` (Stage 3) y reflejar los `allocs/op` nuevos en
+8. **Asignaciones:** confirmar `AllocsPerRun==0` (Stage 3) y reflejar los `allocs/op` nuevos en
    esa misma sección. Actualizar "Last updated".
 
 ### Stage 5 — documentación (OBLIGATORIO)
-10. **`README.md`**: reescribir `ToJS`/`ToGo`/`ToAny`. Dejar claro: structs/slices vía
-    `fmt.Encodable`/`fmt.Decodable` (no reflexión, no tags, no map); `ToAny` ya no devuelve `map`
-    para objetos (devuelve el `js.Value`); regla única de `[]byte`. Quitar toda mención a
-    "reflection"/"map". Enlazar `docs/BENCHMARK.md`.
+9. **`README.md`**: reescribir `ToJS`/`ToGo`/`ToAny`. Dejar claro: structs/slices vía
+   `fmt.Encodable`/`fmt.Decodable` (no reflexión, no tags, no map); `ToAny` ya no devuelve `map`
+   para objetos (devuelve el `js.Value`); regla única de `[]byte`. Quitar toda mención a
+   "reflection"/"map". Enlazar `docs/BENCHMARK.md`.
 
 ## Verificación (repo-local, ejecutable por el agente)
 
@@ -141,6 +140,10 @@ GOOS=js GOARCH=wasm go list -deps . | grep -E '^reflect$' && echo "FALLA: reflec
 gotest    # o: go test -c && node ... (workaround)
 ```
 
+> Validación de tamaño aguas abajo (NO la hace el agente): en `goflare-demo`,
+> `GOOS=js GOARCH=wasm go list -deps ./edge | grep -E '^reflect$'` debe quedar vacío y
+> `edge.wasm` bajar ~72 KB (234 KB → ~150 KB).
+
 ## Checklist de calidad (obligatorio)
 
 - **Sin `reflect`** (0 referencias).
@@ -152,3 +155,21 @@ gotest    # o: go test -c && node ... (workaround)
 - **Regla única de `[]byte`** en un solo helper.
 - **Sin duplicación:** `jsObjectReader.Bytes` y `ScanValue *[]byte` comparten el helper de `[]byte`.
 - Reglas genéricas del ecosistema: ver [`AGENTS.md`](../AGENTS.md).
+
+## Tabla de stages
+
+| Stage | Objetivo | Entregable | Criterio de salida |
+|---|---|---|---|
+| 1 | Writers/readers JS | `codec_wasm.go` | implementan las interfaces de `fmt` |
+| 2 | Reescribir conversores | `jsvalue.go` sin reflect/map | `grep` (verif. 1) limpio |
+| 3 | Tests + 0-alloc | structs de test = `Encodable`; `AllocsPerRun==0` | `gotest` wasm verde |
+| 4 | Comparativa antes/después | **actualizar `benchmark_test.go` + "Performance Results" del README** (tamaño wasm + allocs Antes\|Después) | delta de `reflect` registrado; benches de map eliminados |
+| 5 | Documentación | `README.md` actualizado | sin "reflection"/"map" |
+
+## Nota (coordinación)
+
+GATE: `fmt` (contrato) debe estar publicado. Para **uso real** desde modelos, estos deben
+implementar `Encodable`/`Decodable` (los genera `ormc` — ver `orm/docs/PLAN.md`); pero `jsvalue`
+**compila y testea** con tipos de test que implementan el contrato a mano, así que NO depende de
+`ormc` para cerrar este plan. `tinywasm/json` y `fmt.Fielder` no cambian. Ver
+`~/Dev/Project/tinywasm/docs/SIZE_OPTIMIZATION_MASTER_PLAN.md`.

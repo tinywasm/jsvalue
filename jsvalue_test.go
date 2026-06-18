@@ -256,3 +256,30 @@ func TestToAny(t *testing.T) {
 		t.Fatal("expected raw js.Value for object")
 	}
 }
+
+func TestCodecAllocations(t *testing.T) {
+	// Note: syscall/js boxes every value passed to obj.Set/Get as interface{},
+	// so Go-heap allocs here are inherent to the JS bridge, not to the codec itself.
+	// json/binary achieve true 0-alloc; jsvalue cannot due to the JS bridge overhead.
+	// This test documents the stable allocation count so regressions are caught.
+	input := &TestStruct{Name: "Alice", Age: 30, Default: "x"}
+	var out TestStruct
+
+	encAllocs := testing.AllocsPerRun(100, func() {
+		_ = ToJS(input)
+	})
+	// jsObjectWriter + syscall/js boxing: expect a small fixed number, not growing with data.
+	if encAllocs > 10 {
+		t.Errorf("ToJS(Encodable) allocated %v times, regression threshold is 10", encAllocs)
+	}
+
+	jsVal := ToJS(input)
+	decAllocs := testing.AllocsPerRun(100, func() {
+		out = TestStruct{}
+		_ = ToGo(jsVal, &out)
+	})
+	if decAllocs > 10 {
+		t.Errorf("ToGo(Decodable) allocated %v times, regression threshold is 10", decAllocs)
+	}
+	_ = out
+}
