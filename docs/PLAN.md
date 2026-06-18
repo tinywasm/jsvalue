@@ -1,11 +1,20 @@
-# PLAN — Eliminar `reflect` de `jsvalue` (fuga de ~72 KB al edge) · BREAKING CHANGE
+# PLAN — `jsvalue` al codec tipado: fuera `reflect` + `map` + `any`-switch (0-alloc) · BREAKING
 
 > Este plan se despacha vía el workflow CodeJob. Ver skill: `agents-workflow`.
 > **Estado:** LISTO PARA REVISIÓN DEL USUARIO.
-> **Repo objetivo:** `github.com/tinywasm/jsvalue`.
-> **Tipo:** breaking change (cambia cómo `ToJS`/`ToGo` manejan structs/slices).
-> **Impacto:** elimina `reflect` del grafo wasm → ~72 KB menos de tablas de tipos en cualquier
-> binario que importe `jsvalue` (medido en `goflare-demo/edge`: 234 KB → ~150 KB estimado).
+> **Repo objetivo:** `github.com/tinywasm/jsvalue` (wasm-only, `//go:build wasm`).
+> **Depende de (GATE):** `tinywasm/fmt` con el contrato `Encodable`/`Decodable`/`FieldWriter`/
+> `FieldReader` publicado (ver `fmt/docs/PLAN.md`).
+> **Tipo:** breaking change. Elimina `reflect` (~72 KB de tablas en wasm) **y** `map` (arrastra
+> el runtime de hashmap de TinyGo) **y** el `switch` de tipos infinito. `jsvalue` se toca **una
+> sola vez** (va directo al codec; sin intermedio basura).
+
+## Reglas permanentes del repo → `AGENTS.md`
+
+Las restricciones del ecosistema (wasm-only `//go:build wasm` sin contraparte `!wasm`; **no
+`reflect`**; **no `map`**; no stdlib → `tinywasm/fmt`; 0-alloc Go-side; contrato único de
+`[]byte`; `gotest`) están en [`AGENTS.md`](../AGENTS.md). Este plan NO las repite completas; solo
+inlinea lo crítico de la tarea (ver Checklist).
 
 ## Prerequisito (PRIMERO — entorno del agente)
 
@@ -13,151 +22,154 @@
 go install github.com/tinywasm/devflow/cmd/gotest@latest
 ```
 
-`jsvalue` y sus tests son **wasm-only** (`//go:build wasm`). `gotest` corre los tests wasm
-automáticamente. Usar `gotest` (sin argumentos); **NO** `go test` directo.
+`jsvalue` y sus tests son **wasm-only**. Si `gotest` no corre wasm en el entorno aislado,
+workaround: `go test -c` + `node`. Criterio de salida: **tests verdes en wasm**.
 
 ## Problema (medido)
 
-`jsvalue.go` importa `reflect` y lo usa en los `default` de `ToJS` y `ToGo` para convertir
-structs/slices arbitrarios Go↔JS por reflexión. `reflect` arrastra **~72 KB de tablas de
-tipos** (la sección `(unknown)` del binario). Medición real en `goflare-demo/edge`:
-
-```
-GOOS=js GOARCH=wasm go list -deps ./edge | grep reflect   → reflect (presente)
-edge.wasm = 234 KB ; sección data = 79 KB (≈72 KB son tablas de reflect)
-```
-
-Cadena: `edge → goflare/d1 → jsvalue → reflect`. Pero **`goflare/d1` solo usa
-`jsvalue.ScanValue`** (que es reflect-free). El `reflect` entra **solo** porque el paquete
-`jsvalue` contiene `ToJS`/`ToGo` con `reflect` en sus ramas `default`.
-
-### Evidencia de que el path reflect NO se usa en el ecosistema
-
-```
-grep -rn 'ToJS(|ToGo(' --include=*.go (todo el monorepo, sin /jsvalue/ ni _test) → 0 resultados
-```
-
-`ToJS`/`ToGo` **no tienen consumidores** en el ecosistema (solo el README y los tests de
-`jsvalue` los referencian). El edge usa exclusivamente `ScanValue`/`ToAny`/`AwaitPromise`/
-`Uint8ArrayClass` — todos reflect-free.
-
-## Principio rector
-
-> `reflect` es stdlib pesado: **prohibido en código wasm** (igual que `tinywasm/fmt` ya lo sacó).
-> La conversión struct↔JS sin reflexión se hace con `fmt.Fielder` (Schema/Pointers generados por
-> `ormc`), el mismo mecanismo que usa `tinywasm/json` (que es reflect-free).
+`jsvalue.go` usa `reflect` en los `default` de `ToJS`/`ToGo` (~72 KB de tablas de tipos en wasm)
+y `map` en varios `case` (`map[string]any/string/int`) + en `ToAny`. Ambos inflan el binario en
+TinyGo. La causa raíz es el **tipo borrado (`any`)** en el límite, que obliga a `switch` infinito
+/ `reflect` / `map`. Evidencia: `ToJS`/`ToGo` **no tienen consumidores** en el ecosistema (solo
+README + tests); el edge usa solo `ScanValue` (reflect/map-free para primitivos).
 
 ## Decisión arquitectónica (resuelta — para revisión del usuario)
 
-**Reemplazar las ramas `default` con reflexión por soporte basado en `fmt.Fielder`** (canónico
-en el ecosistema), con fallback seguro. Se conserva todo lo demás (primitivos, `map`, `[]any`,
-`[]string`, `[]int`, etc. ya tienen `case` explícito antes del `default`).
+Migrar la conversión de structs/slices al **codec tipado de `fmt`** (patrón visitor). `jsvalue`
+implementa los writer/reader concretos sobre `js.Value`. Se eliminan `reflect`, los `case` de
+`map`, y el `default` por reflexión.
 
-- **`ToJS(data any)`** — rama `default`:
-  - Si `data` implementa `fmt.Fielder` → construir objeto JS: por cada `Field` de `Schema()`,
-    clave = `Field.Name`, valor = `ToJS(<deref de Pointers()[i]>)`. Respetar `Field.OmitEmpty`
-    (omitir si el valor es cero, usando `fmt.IsZero`).
-  - Si implementa `fmt.FielderSlice` → array JS recorriendo `Len()`/`At(i)`.
-  - Si no → fallback actual: `js.ValueOf(Convert(v).String())`.
-- **`ToGo(jsVal js.Value, v any)`** — rama `default`:
-  - Si `v` implementa `fmt.Fielder` → por cada `Field` de `Schema()`, leer `jsVal.Get(Field.Name)`
-    y, si no es undefined/null, `ScanValue(jsField, Pointers()[i])`.
-  - Si no → `return Err("jsvalue", "unsupported", "destination", "type")` (sin reflect).
-- **Eliminar** el import `"reflect"` y TODO uso de `reflect.*` (incluyendo el deref genérico de
-  punteros y el `reflect.MakeSlice`/`reflect.New` para slices de structs arbitrarios).
+### Contrato de `fmt` (ya publicado, para referencia)
 
-### Qué se pierde (aceptable: sin consumidores)
+```go
+type FieldWriter interface { String(name,val string); Int(name string,val int64); Uint(...); Float(...); Bool(...); Bytes(name string,val []byte); Null(name string); Object(name string,val Encodable); Array(name string,n int,each func(i int,a ArrayWriter)) }
+type ArrayWriter interface { String(val string); Int(val int64); Float(val float64); Bool(val bool); Bytes(val []byte); Object(val Encodable) }
+type Encodable interface { EncodeFields(w FieldWriter) }
+type FieldReader interface { String(name string)(string,bool); Int(...); Uint(...); Float(...); Bool(...); Bytes(...)([]byte,bool); Object(name string,into Decodable) bool; Array(name string)(ArrayReader,bool) }
+type ArrayReader interface { Len() int; String(i int) string; Int(i int) int64; Float(i int) float64; Bool(i int) bool; Bytes(i int) []byte; Object(i int,into Decodable) bool }
+type Decodable interface { DecodeFields(r FieldReader) error }
+```
 
-- Conversión automática de **structs planos por tags `json:`** vía reflexión.
-- Conversión de **slices de tipos arbitrarios** (`[]MiStruct`) vía reflexión.
+### Lo que se IMPLEMENTA (archivo nuevo `codec_wasm.go`)
 
-Ambos casos no tienen consumidores en el ecosistema. Quien los necesite usa un tipo `fmt.Fielder`
-(generado por `ormc`) o un slice `fmt.FielderSlice`. Documentarlo en el README.
+- `jsObjectWriter` (`fmt.FieldWriter`): escribe a un `js.Object` vía `obj.Set(name, …)`. Cada
+  método mapea a `js.ValueOf` del valor tipado; `Bytes` → ver regla de `[]byte` abajo; `Object`
+  → crea sub-objeto y recursa con `EncodeFields`; `Array` → `Array.New(n)` + `ArrayWriter`.
+- `jsArrayWriter` (`fmt.ArrayWriter`): `arr.SetIndex(i, …)`.
+- `jsObjectReader` (`fmt.FieldReader`): `jsVal.Get(name)` + extracción tipada (`.String()`,
+  `.Int()`, `.Float()`, `.Bool()`); presencia = `!IsUndefined() && !IsNull()`.
+- `jsArrayReader` (`fmt.ArrayReader`): `jsVal.Index(i)`.
 
-### Qué NO se toca
+### Lo que se REESCRIBE en `jsvalue.go`
 
-- `ScanValue` (reflect-free, lo usa el edge) — intacto.
-- `ToAny` (reflect-free) — intacto.
-- Todos los `case` de primitivos/`map`/`[]any`/`[]string`/`[]int`/`[]byte` en `ToJS`/`ToGo` —
-  intactos.
-- `async_wasm.go` (`AwaitPromise`), `Uint8ArrayClass` — intactos.
+- **`ToJS(data any) js.Value`**: conservar los `case` de **primitivos** (string, bool, ints,
+  floats, `[]byte`, `[]string`, `[]int`, `[]any`). **ELIMINAR** los `case` de `map[string]*`.
+  **`default`**: si `data` implementa `fmt.Encodable` → crear `js.Object`, envolver en
+  `jsObjectWriter` y llamar `EncodeFields`. Si no → fallback `js.ValueOf(Convert(v).String())`.
+  **Quitar el import `reflect` y todo `reflect.*`.**
+- **`ToGo(jsVal js.Value, v any) error`**: conservar los `case` de punteros a primitivos y
+  `*[]byte` (con la regla de `[]byte` abajo). **ELIMINAR** los `case` de `*map[string]*`.
+  **`default`**: si `v` implementa `fmt.Decodable` → envolver `jsVal` en `jsObjectReader` y
+  llamar `DecodeFields`. Si no → `Err("jsvalue","unsupported","destination","type")`.
+  **Quitar `reflect`.**
+- **`ToAny(v js.Value) any`**: para `TypeObject` que es **array** → `[]any` (OK, sin map). Para
+  objeto NO-array → **devolver el `js.Value` crudo** (no construir `map[string]any`). Quitar el
+  `map`. Documentar: para decodificar campos de un objeto, usar un tipo `fmt.Decodable` + `ToGo`.
+- **`ScanValue`**: se conserva (primitivos, reflect/map-free). Alinear `*[]byte` para que acepte
+  **string Y Uint8Array** (un solo contrato de `[]byte`, ver abajo).
+
+### Regla única de `[]byte` (arregla el drift de 3 codificaciones)
+
+`[]byte` ↔ **JS string** es el contrato canónico de `ToJS`/`Encode`. La decodificación
+(`ScanValue *[]byte`, `FieldReader.Bytes`) acepta **string Y Uint8Array** (Uint8Array porque los
+blobs de D1 llegan así). Una sola regla, implementada en un único helper reutilizado por
+`ScanValue` y `jsObjectReader.Bytes`.
 
 ## Pasos de ejecución
 
-### Stage 1 — quitar reflect de `jsvalue.go`
-1. Eliminar `import "reflect"`.
-2. Reescribir la rama `default` de `ToJS` según la Decisión (Fielder / FielderSlice / fallback
-   string). Para leer el valor detrás de cada `Pointers()[i]` (que es un `any` apuntando al
-   campo), reutilizar `fmt.ReadValues(schema, ptrs)` que ya desreferencia, y pasar cada valor a
-   `ToJS(...)`.
-3. Reescribir la rama `default` de `ToGo` según la Decisión (Fielder → `ScanValue` por campo;
-   si no, error).
-4. Verificar que no queda ningún identificador `reflect.` en el archivo.
+### Stage 1 — writers/readers concretos
+1. Crear `codec_wasm.go` (`//go:build wasm`) con `jsObjectWriter`, `jsArrayWriter`,
+   `jsObjectReader`, `jsArrayReader` implementando las interfaces de `fmt`. Helper único de
+   `[]byte` (string|Uint8Array).
 
-### Stage 2 — actualizar tests
-5. Los tests `jsvalue_test.go` y `benchmark_test.go` usan structs **planos** (`TestStruct`,
-   `ComplexStruct`, `ByteStruct`, `TagStruct`) que dependían de reflexión. Convertirlos en tipos
-   que implementen `fmt.Fielder` (con `Schema() []fmt.Field` y `Pointers() []any`) para seguir
-   cubriendo el round-trip struct↔JS por el nuevo camino. Mantener la cobertura de:
-   - objeto JS con claves = nombres de campo,
-   - `OmitEmpty`,
-   - campos `[]byte` (codificados como string),
-   - tipos no soportados → fallback/error.
-   Si algún test cubría exclusivamente la reflexión de structs arbitrarios (sin Fielder),
-   reescribirlo al equivalente con Fielder o eliminarlo.
+### Stage 2 — reescribir `jsvalue.go`
+2. Quitar `import "reflect"`. Reescribir `default` de `ToJS` (Encodable) y `ToGo` (Decodable).
+   Eliminar los `case` de `map`. Ajustar `ToAny` (sin map). Alinear `ScanValue *[]byte`.
+3. Confirmar: sin `reflect.` y sin `map[` en todo `jsvalue.go` y `codec_wasm.go`.
 
-### Stage 3 — documentación (OBLIGATORIO)
-6. **`README.md`**: actualizar las secciones `ToJS` y `ToGo`. Dejar claro que la conversión de
-   structs/slices es vía `fmt.Fielder`/`fmt.FielderSlice` (no reflexión por tags), y que tipos
-   no soportados caen en fallback (string) / error. Quitar cualquier afirmación de "uses
-   reflection". Mantener los ejemplos de primitivos/maps/slices.
+### Stage 3 — tests
+4. Reescribir `jsvalue_test.go` y `benchmark_test.go`: los structs de test (`TestStruct`,
+   `ComplexStruct`, `ByteStruct`, `TagStruct`) implementan `fmt.Encodable`/`fmt.Decodable` (a
+   mano en el test; **no** usar `map`, **no** depender de tags por reflexión). El test que usaba
+   `map[string]int` se reescribe a un `Encodable`. Cubrir: objeto con claves = nombres de campo,
+   anidado, array, `[]byte` (string↔Uint8Array), y tipo no soportado → fallback/error.
+5. Test de asignaciones: `testing.AllocsPerRun` sobre el round-trip con writer/reader reusados →
+   afirmar **0 asignaciones del heap Go** en el camino de codec (la creación del objeto JS es
+   del lado JS y no cuenta).
 
-### Stage 4 — verificación
-7. `gotest` verde (wasm).
-8. `jsvalue` ya no importa `reflect`.
+### Stage 4 — actualizar el benchmark existente (antes/después) — OBLIGATORIO
+**YA EXISTE** `benchmark_test.go` (`BenchmarkToJS_*`/`ToGo_*`) y la sección **"Performance
+Results"** en `README.md`. **NO crear** un doc nuevo; **actualizar** lo existente:
+6. **Ajustar `benchmark_test.go`:** los benches de structs (`BenchmarkToJS_Struct`,
+   `BenchmarkToGo_Struct`) pasan por el codec (el tipo de bench implementa `fmt.Encodable`/
+   `Decodable`). **Eliminar** los benches del camino map que ya no existe (`BenchmarkToGo_Any_Map`,
+   `BenchmarkToGo_Map_Reuse`).
+7. **Tamaño de binario wasm (headline):** medir un `main.go` representativo (usa `ToJS`/`ToGo`
+   de un tipo `Encodable`) con `tinygo build -target wasm -opt=z -no-debug` **antes** (con
+   reflect/map) y **después** (codec). Registrar el delta esperado (cae el bloque `reflect`,
+   ~72 KB) en la sección **"Performance Results"** del `README.md`.
+8. **Asignaciones:** confirmar `AllocsPerRun==0` (Stage 3) y reflejar los `allocs/op` nuevos en
+   esa misma sección. Actualizar "Last updated".
+
+### Stage 5 — documentación (OBLIGATORIO)
+9. **`README.md`**: reescribir `ToJS`/`ToGo`/`ToAny`. Dejar claro: structs/slices vía
+   `fmt.Encodable`/`fmt.Decodable` (no reflexión, no tags, no map); `ToAny` ya no devuelve `map`
+   para objetos (devuelve el `js.Value`); regla única de `[]byte`. Quitar toda mención a
+   "reflection"/"map". Enlazar `docs/BENCHMARK.md`.
 
 ## Verificación (repo-local, ejecutable por el agente)
 
 ```bash
-# 1. Sin reflect en el código del paquete:
-grep -n 'reflect' jsvalue.go && echo "FALLA: aún usa reflect" || echo "OK: sin reflect"
+# 1. Sin reflect ni map en el paquete:
+grep -nE '"reflect"|reflect\.|map\[' jsvalue.go codec_wasm.go && echo "FALLA" || echo "OK: sin reflect/map"
 
 # 2. El paquete wasm no arrastra reflect:
-GOOS=js GOARCH=wasm go list -deps . | grep -E '^reflect$' && echo "FALLA: reflect en deps" || echo "OK: sin reflect en deps"
+GOOS=js GOARCH=wasm go list -deps . | grep -E '^reflect$' && echo "FALLA: reflect en deps" || echo "OK"
 
-# 3. Tests verdes (wasm):
-gotest
+# 3. Tests verdes (wasm) + 0-alloc:
+gotest    # o: go test -c && node ... (workaround)
 ```
 
 > Validación de tamaño aguas abajo (NO la hace el agente): en `goflare-demo`,
-> `GOOS=js GOARCH=wasm go list -deps ./edge | grep '^reflect$'` debe quedar vacío y `edge.wasm`
-> bajar ~72 KB (234 KB → ~150 KB).
+> `GOOS=js GOARCH=wasm go list -deps ./edge | grep -E '^reflect$'` debe quedar vacío y
+> `edge.wasm` bajar ~72 KB (234 KB → ~150 KB).
 
 ## Checklist de calidad (obligatorio)
 
-- **Sin strings hardcodeados repetidos:** las claves/mensajes de error repetidos → constantes o
-  vía `fmt.Err(...)` con palabras. Nada de literales duplicados en la lógica.
-- **Sin duplicación lógica:** reutilizar `ScanValue` para decodificar cada campo en `ToGo`
-  (no reimplementar la conversión por tipo). Reutilizar `fmt.ReadValues` para leer valores en
-  `ToJS`.
-- **Reglas tinywasm:**
-  - Nada de stdlib pesado en wasm: **cero `reflect`**. Usar `tinywasm/fmt` (no `errors`/`strconv`).
-  - `jsvalue` ya importa `fmt` (dot-import) — `Fielder`/`Field`/`IsZero`/`ReadValues`/`Err` están
-    disponibles sin nuevas dependencias.
-  - El archivo sigue siendo `//go:build wasm` (jsvalue es interop JS, no aplica `!wasm`).
+- **Sin `reflect`** (0 referencias).
+- **Sin `map`** en `jsvalue.go` ni `codec_wasm.go` (ni `case map[...]`, ni `ToAny`→map).
+- **Sin `any` en el camino de structs/slices** (va por el codec tipado). `ToJS(any)`/`ToGo(any)`
+  mantienen `any` solo en su firma de entrada (compatibilidad), pero el dispatch de structs es
+  por interfaz, no por reflexión.
+- **0 asignaciones Go-side** en el codec (writer/reader reusan estado).
+- **Regla única de `[]byte`** en un solo helper.
+- **Sin duplicación:** `jsObjectReader.Bytes` y `ScanValue *[]byte` comparten el helper de `[]byte`.
+- Reglas genéricas del ecosistema: ver [`AGENTS.md`](../AGENTS.md).
 
 ## Tabla de stages
 
 | Stage | Objetivo | Entregable | Criterio de salida |
 |---|---|---|---|
-| 1 | `jsvalue.go` sin reflect | `ToJS`/`ToGo` con Fielder + fallback | `grep reflect jsvalue.go` vacío |
-| 2 | Tests | structs de test → `fmt.Fielder`; cobertura preservada | compila y cubre round-trip |
-| 3 | Documentación | `README.md` (ToJS/ToGo) actualizado | sin "reflection" en README |
-| 4 | Verificación | — | `gotest` verde; deps wasm sin `reflect` |
+| 1 | Writers/readers JS | `codec_wasm.go` | implementan las interfaces de `fmt` |
+| 2 | Reescribir conversores | `jsvalue.go` sin reflect/map | `grep` (verif. 1) limpio |
+| 3 | Tests + 0-alloc | structs de test = `Encodable`; `AllocsPerRun==0` | `gotest` wasm verde |
+| 4 | Comparativa antes/después | **actualizar `benchmark_test.go` + "Performance Results" del README** (tamaño wasm + allocs Antes\|Después) | delta de `reflect` registrado; benches de map eliminados |
+| 5 | Documentación | `README.md` actualizado | sin "reflection"/"map" |
 
-## Nota (contexto del master plan)
+## Nota (coordinación)
 
-Este es el mayor lever de tamaño que queda en el edge tras cerrar las fugas de
-`regexp`/`html`/`dom`/diccionario. Ver `~/Dev/Project/tinywasm/docs/SIZE_OPTIMIZATION_MASTER_PLAN.md`.
-La Fase D (`fetch` fuera del edge) NO es palanca de tamaño (código alcanzable despreciable) —
-es solo limpieza arquitectónica y se trata aparte.
+GATE: `fmt` (contrato) debe estar publicado. Para **uso real** desde modelos, estos deben
+implementar `Encodable`/`Decodable` (los genera `ormc` — ver `orm/docs/PLAN.md`); pero `jsvalue`
+**compila y testea** con tipos de test que implementan el contrato a mano, así que NO depende de
+`ormc` para cerrar este plan. `tinywasm/json` y `fmt.Fielder` no cambian. Ver
+`~/Dev/Project/tinywasm/docs/SIZE_OPTIMIZATION_MASTER_PLAN.md`.
