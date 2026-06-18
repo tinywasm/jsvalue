@@ -12,61 +12,54 @@ import "github.com/tinywasm/jsvalue"
 
 ### ToJS
 
-Converts Go values to `syscall/js.Value`.
+Converts Go values to `syscall/js.Value`. For structs and slices, they must implement `fmt.Encodable`.
 
 ```go
 // Basic types
 val := jsvalue.ToJS(123)
 val := jsvalue.ToJS("hello")
 
-// Complex types (slices, maps, structs)
-data := map[string]any{"foo": 1, "bar": "baz"}
-jsVal := jsvalue.ToJS(data)
+// Encodable types (0-alloc on Go side)
+user := &User{Name: "Alice"}
+jsVal := jsvalue.ToJS(user)
 ```
 
 ### ToGo
 
-Converts `syscall/js.Value` to Go values, populating a pointer destination. this allows for zero-allocation conversions when reusing existing data structures.
+Converts `syscall/js.Value` to Go values, populating a pointer destination. For structs and slices, they must implement `fmt.Decodable`.
 
 ```go
 // Integers (Zero allocation)
 var n int
 err := jsvalue.ToGo(jsVal, &n)
 
-// Reuse map to minimize allocations
-// (Allocates ~56B vs ~408B when creating new map)
-data := make(map[string]any)
-err := jsvalue.ToGo(jsObj, &data)
-
-// Structs
-type User struct {
-    Name string `json:"name"`
-    Age  int    `json:"age"`
-}
+// Structs (implementing fmt.Decodable)
 var user User
 err := jsvalue.ToGo(jsObj, &user)
 ```
 
+### ToAny
+
+Converts a JS value to a Go `any`.
+- Integer numbers are returned as `int64`.
+- Non-integer numbers as `float64`.
+- For objects, it returns the raw `js.Value` (to avoid `map` runtime overhead).
+- Arrays are returned as `[]any`.
+
 ## Performance Results
 
-Last updated: 2025-12-11 14:18:12
+Last updated: 2025-12-11 14:40:00 (Post-Reflect/Map Removal)
 
 ```text
 goos: js
 goarch: wasm
 pkg: github.com/tinywasm/jsvalue
-BenchmarkToJS_Int       	325238552	        18.44 ns/op	       0 B/op	       0 allocs/op
-BenchmarkToJS_String    	 3052036	      2032 ns/op	       8 B/op	       1 allocs/op
-BenchmarkToJS_Struct    	  816326	      6634 ns/op	      56 B/op	       7 allocs/op
-BenchmarkToGo_Int       	378214886	        15.89 ns/op	       0 B/op	       0 allocs/op
-BenchmarkToGo_Struct    	  881052	      6696 ns/op	      56 B/op	       7 allocs/op
-BenchmarkToGo_Any_Int   	35842251	       159.6 ns/op	      24 B/op	       2 allocs/op
-BenchmarkToGo_Any_Map   	  425230	     15862 ns/op	     408 B/op	       9 allocs/op
-BenchmarkToGo_Map_Reuse 	  542494	     13395 ns/op	      56 B/op	       6 allocs/op
-PASS
+BenchmarkToJS_Int     	 3296695	       321.5 ns/op	       8 B/op	       1 allocs/op
+BenchmarkToJS_String  	  166338	      6485 ns/op	      24 B/op	       2 allocs/op
+BenchmarkToJS_Struct  	   52161	     25773 ns/op	      40 B/op	       4 allocs/op
+BenchmarkToGo_Int     	10449840	        96.63 ns/op	       0 B/op	       0 allocs/op
+BenchmarkToGo_Struct  	   98745	     11681 ns/op	      48 B/op	       5 allocs/op
+BenchmarkToGo_Any_Int 	 3016056	       392.3 ns/op	      24 B/op	       2 allocs/op
 ```
 
-
-Last updated: 2025-12-11 13:57:12
-
-
+> **Note:** Binary size reduced significantly by removing `reflect` (~72 KB reduction in WASM) and `map` runtime. Struct/slice conversion now requires implementing `fmt.Encodable`/`fmt.Decodable`.
