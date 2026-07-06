@@ -5,7 +5,7 @@ package jsvalue
 import (
 	"syscall/js"
 
-	. "github.com/tinywasm/fmt"
+	. "github.com/tinywasm/model"
 )
 
 // decodeBytes is the single contract for []byte decoding.
@@ -26,13 +26,14 @@ type jsObjectWriter struct {
 	obj js.Value
 }
 
-func (w *jsObjectWriter) String(name, val string) { w.obj.Set(name, val) }
-func (w *jsObjectWriter) Int(name string, val int64)   { w.obj.Set(name, val) }
-func (w *jsObjectWriter) Uint(name string, val uint64) { w.obj.Set(name, val) }
+func (w *jsObjectWriter) String(name, val string)        { w.obj.Set(name, val) }
+func (w *jsObjectWriter) Int(name string, val int64)     { w.obj.Set(name, val) }
+func (w *jsObjectWriter) Uint(name string, val uint64)   { w.obj.Set(name, val) }
 func (w *jsObjectWriter) Float(name string, val float64) { w.obj.Set(name, val) }
-func (w *jsObjectWriter) Bool(name string, val bool)   { w.obj.Set(name, val) }
-func (w *jsObjectWriter) Bytes(name string, val []byte) { w.obj.Set(name, string(val)) }
-func (w *jsObjectWriter) Null(name string)             { w.obj.Set(name, js.Null()) }
+func (w *jsObjectWriter) Bool(name string, val bool)     { w.obj.Set(name, val) }
+func (w *jsObjectWriter) Bytes(name string, val []byte)  { w.obj.Set(name, string(val)) }
+func (w *jsObjectWriter) Null(name string)               { w.obj.Set(name, js.Null()) }
+func (w *jsObjectWriter) Raw(name, val string)           { w.obj.Set(name, js.Global().Call("JSON.parse", val)) }
 
 func (w *jsObjectWriter) Object(name string, val Encodable) {
 	if val == nil || val.IsNil() {
@@ -61,6 +62,7 @@ func (w *jsArrayWriter) Int(val int64)     { w.arr.SetIndex(w.idx, val); w.idx++
 func (w *jsArrayWriter) Float(val float64) { w.arr.SetIndex(w.idx, val); w.idx++ }
 func (w *jsArrayWriter) Bool(val bool)     { w.arr.SetIndex(w.idx, val); w.idx++ }
 func (w *jsArrayWriter) Bytes(val []byte)  { w.arr.SetIndex(w.idx, string(val)); w.idx++ }
+func (w *jsArrayWriter) Close()            {}
 func (w *jsArrayWriter) Object(val Encodable) {
 	if val == nil || val.IsNil() {
 		w.arr.SetIndex(w.idx, js.Null())
@@ -126,13 +128,22 @@ func (r *jsObjectReader) Bytes(name string) ([]byte, bool) {
 	return decodeBytes(v), true
 }
 
+func (r *jsObjectReader) Raw(name string) (string, bool) {
+	v := r.obj.Get(name)
+	if v.IsUndefined() || v.IsNull() {
+		return "", false
+	}
+	return js.Global().Call("JSON.stringify", v).String(), true
+}
+
 func (r *jsObjectReader) Object(name string, into Decodable) bool {
 	v := r.obj.Get(name)
 	if v.IsUndefined() || v.IsNull() {
 		return false
 	}
 	sr := jsObjectReader{obj: v}
-	return into.DecodeFields(&sr) == nil
+	into.DecodeFields(&sr)
+	return true
 }
 
 func (r *jsObjectReader) Array(name string) (ArrayReader, bool) {
@@ -161,5 +172,6 @@ func (r *jsArrayReader) Object(i int, into Decodable) bool {
 		return false
 	}
 	sr := jsObjectReader{obj: v}
-	return into.DecodeFields(&sr) == nil
+	into.DecodeFields(&sr)
+	return true
 }

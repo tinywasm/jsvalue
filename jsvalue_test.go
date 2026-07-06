@@ -6,7 +6,7 @@ import (
 	"syscall/js"
 	"testing"
 
-	. "github.com/tinywasm/fmt"
+	. "github.com/tinywasm/model"
 )
 
 type TestStruct struct {
@@ -22,12 +22,11 @@ func (s *TestStruct) EncodeFields(w FieldWriter) {
 	w.Int("age", int64(s.Age))
 	w.String("Default", s.Default)
 }
-func (s *TestStruct) DecodeFields(r FieldReader) error {
+func (s *TestStruct) DecodeFields(r FieldReader) {
 	s.Name, _ = r.String("name")
 	age, _ := r.Int("age")
 	s.Age = int(age)
 	s.Default, _ = r.String("Default")
-	return nil
 }
 
 type MultiArrayStruct struct {
@@ -41,12 +40,14 @@ func (s *MultiArrayStruct) EncodeFields(w FieldWriter) {
 	for _, v := range s.A {
 		aw1.Int(int64(v))
 	}
+	aw1.Close()
 	aw2 := w.Array("b", len(s.B))
 	for _, v := range s.B {
 		aw2.String(v)
 	}
+	aw2.Close()
 }
-func (s *MultiArrayStruct) DecodeFields(r FieldReader) error {
+func (s *MultiArrayStruct) DecodeFields(r FieldReader) {
 	if ar, ok := r.Array("a"); ok {
 		s.A = make([]int, ar.Len())
 		for i := 0; i < ar.Len(); i++ {
@@ -59,7 +60,6 @@ func (s *MultiArrayStruct) DecodeFields(r FieldReader) error {
 			s.B[i] = ar.String(i)
 		}
 	}
-	return nil
 }
 
 type ComplexStruct struct {
@@ -74,8 +74,9 @@ func (s *ComplexStruct) EncodeFields(w FieldWriter) {
 	for _, v := range s.List {
 		aw.Int(int64(v))
 	}
+	aw.Close()
 }
-func (s *ComplexStruct) DecodeFields(r FieldReader) error {
+func (s *ComplexStruct) DecodeFields(r FieldReader) {
 	s.Nested = &TestStruct{}
 	r.Object("nested", s.Nested)
 	if ar, ok := r.Array("list"); ok {
@@ -84,7 +85,6 @@ func (s *ComplexStruct) DecodeFields(r FieldReader) error {
 			s.List[i] = int(ar.Int(i))
 		}
 	}
-	return nil
 }
 
 func TestToJS(t *testing.T) {

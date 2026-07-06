@@ -3,9 +3,9 @@
 package jsvalue
 
 import (
-	"syscall/js"
-
 	. "github.com/tinywasm/fmt"
+	. "github.com/tinywasm/model"
+	"syscall/js"
 )
 
 var (
@@ -14,7 +14,7 @@ var (
 )
 
 // ToJS converts Go values to JavaScript values recursively.
-// For structs and slices, they must implement fmt.Encodable.
+// For structs and slices, they must implement model.Encodable.
 func ToJS(data any) js.Value {
 	if data == nil {
 		return js.Null()
@@ -97,7 +97,7 @@ func ToJS(data any) js.Value {
 }
 
 // ToGo converts JavaScript values to Go values.
-// For structs and slices, they must implement fmt.Decodable.
+// For structs and slices, they must implement model.Decodable.
 func ToGo(jsVal js.Value, v any) error {
 	if v == nil {
 		return Err("jsvalue", "destination", "is", "nil")
@@ -142,7 +142,8 @@ func ToGo(jsVal js.Value, v any) error {
 		}
 		if d, ok := v.(Decodable); ok {
 			r := jsObjectReader{obj: jsVal}
-			return d.DecodeFields(&r)
+			d.DecodeFields(&r)
+			return nil
 		}
 		return Err("jsvalue", "unsupported", "destination", "type")
 	}
