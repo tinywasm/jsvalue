@@ -3,9 +3,10 @@
 package jsvalue
 
 import (
-	. "github.com/tinywasm/fmt"
-	. "github.com/tinywasm/model"
 	"syscall/js"
+
+	"github.com/tinywasm/fmt"
+	. "github.com/tinywasm/model"
 )
 
 var (
@@ -92,7 +93,7 @@ func ToJS(data any) js.Value {
 			return obj
 		}
 		// Fallback: convert to string
-		return js.ValueOf(Convert(v).String())
+		return js.ValueOf(fmt.Convert(v).String())
 	}
 }
 
@@ -100,7 +101,7 @@ func ToJS(data any) js.Value {
 // For structs and slices, they must implement model.Decodable.
 func ToGo(jsVal js.Value, v any) error {
 	if v == nil {
-		return Err("jsvalue", "destination", "is", "nil")
+		return fmt.Err("jsvalue", "destination", "is", "nil")
 	}
 
 	switch ptr := v.(type) {
@@ -138,14 +139,14 @@ func ToGo(jsVal js.Value, v any) error {
 		*ptr = decodeBytes(jsVal)
 	default:
 		if IsNil(v) {
-			return Err("jsvalue", "destination", "is", "nil")
+			return fmt.Err("jsvalue", "destination", "is", "nil")
 		}
 		if d, ok := v.(Decodable); ok {
 			r := jsObjectReader{obj: jsVal}
 			d.DecodeFields(&r)
 			return nil
 		}
-		return Err("jsvalue", "unsupported", "destination", "type")
+		return fmt.Err("jsvalue", "unsupported", "destination", "type")
 	}
 	return nil
 }

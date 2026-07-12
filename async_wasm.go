@@ -5,7 +5,7 @@ package jsvalue
 import (
 	"syscall/js"
 
-	. "github.com/tinywasm/fmt"
+	"github.com/tinywasm/fmt"
 )
 
 // Uint8ArrayClass is the JS Uint8Array constructor.
@@ -29,7 +29,7 @@ func AwaitPromise(p js.Value) (js.Value, error) {
 		if !errVal.IsNull() && !errVal.IsUndefined() {
 			msg = errVal.Call("toString").String()
 		}
-		errCh <- Errf("jsvalue: %s", msg)
+		errCh <- fmt.Errf("jsvalue: %s", msg)
 		return js.Undefined()
 	})
 	defer catch.Release()
@@ -64,7 +64,7 @@ func AwaitRequest(req js.Value) (js.Value, error) {
 		if errVal.Truthy() {
 			msg = errVal.Get("message").String()
 		}
-		reqErr = Err("jsvalue: IndexedDB request failed:", msg)
+		reqErr = fmt.Err("jsvalue: IndexedDB request failed:", msg)
 		done <- struct{}{}
 		return nil
 	})
