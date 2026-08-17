@@ -46,6 +46,13 @@ Converts a JS value to a Go `any`.
 - For objects, it returns the raw `js.Value` (to avoid `map` runtime overhead).
 - Arrays are returned as `[]any`.
 
+### Blocking on a Promise or JS event
+
+To block a goroutine on a Promise or a one-shot JS event, use
+[`github.com/tinywasm/await`](https://github.com/tinywasm/await)
+(`await.Promise`, `await.Request`) — that is a different concern from this
+codec and must not be reintroduced here.
+
 ## Performance Results
 
 Last updated: 2026-06-18 (Post-Reflect/Map Removal — codec migration)

@@ -8,8 +8,9 @@ rules below (do not duplicate them in plans).
 
 `tinywasm/jsvalue` is the **Go ↔ JavaScript value bridge** for TinyGo WASM (over `syscall/js`).
 It converts Go values to/from `js.Value`: `ToJS`, `ToGo`, `ScanValue`, `ToAny`, plus
-`AwaitPromise` and `Uint8ArrayClass`. It is the thin boundary used by `goflare/d1`, `indexdb`,
-etc.
+`Uint8ArrayClass`. It is the thin boundary used by `goflare/d1`, `indexdb`,
+etc. Blocking a goroutine on a Promise or a JS event is **out of scope** — it
+lives in `github.com/tinywasm/await`; do not reintroduce it here.
 
 ## Ecosystem restrictions (do NOT violate)
 

@@ -12,6 +12,9 @@ import (
 var (
 	jsObject = js.Global().Get("Object")
 	jsArray  = js.Global().Get("Array")
+
+	// Uint8ArrayClass is the JS Uint8Array constructor.
+	Uint8ArrayClass = js.Global().Get("Uint8Array")
 )
 
 // ToJS converts Go values to JavaScript values recursively.
