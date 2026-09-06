@@ -5,7 +5,7 @@ package jsvalue
 import (
 	"syscall/js"
 
-	. "github.com/tinywasm/model"
+	. "webtyp.com/model"
 )
 
 // decodeBytes is the single contract for []byte decoding.

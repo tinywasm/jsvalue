@@ -5,8 +5,8 @@ package jsvalue
 import (
 	"syscall/js"
 
-	"github.com/tinywasm/fmt"
-	. "github.com/tinywasm/model"
+	"webtyp.com/fmt"
+	. "webtyp.com/model"
 )
 
 var (

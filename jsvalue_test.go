@@ -6,7 +6,7 @@ import (
 	"syscall/js"
 	"testing"
 
-	. "github.com/tinywasm/model"
+	. "webtyp.com/model"
 )
 
 type TestStruct struct {

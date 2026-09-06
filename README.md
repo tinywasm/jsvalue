@@ -7,7 +7,7 @@ Efficient conversions between JavaScript and Go for a WebAssembly environment wi
 ### Importing
 
 ```go
-import "github.com/tinywasm/jsvalue"
+import "webtyp.com/jsvalue"
 ```
 
 ### ToJS
@@ -49,7 +49,7 @@ Converts a JS value to a Go `any`.
 ### Blocking on a Promise or JS event
 
 To block a goroutine on a Promise or a one-shot JS event, use
-[`github.com/tinywasm/await`](https://github.com/tinywasm/await)
+[`webtyp.com/await`](https://github.com/webtyp/await)
 (`await.Promise`, `await.Request`) — that is a different concern from this
 codec and must not be reintroduced here.
 
@@ -66,7 +66,7 @@ Last updated: 2026-06-18 (Post-Reflect/Map Removal — codec migration)
 ### Benchmarks (goos: js, goarch: wasm — measured 2026-06-18)
 
 ```text
-pkg: github.com/tinywasm/jsvalue
+pkg: github.com/webtyp/jsvalue
 BenchmarkToJS_Int     	143221300	        16.80 ns/op	       0 B/op	       0 allocs/op
 BenchmarkToJS_String  	 1000000	      2029 ns/op	       8 B/op	       1 allocs/op
 BenchmarkToJS_Struct  	  313754	      8153 ns/op	      40 B/op	       4 allocs/op

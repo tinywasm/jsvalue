@@ -1,4 +1,4 @@
-# AGENTS.md — tinywasm/jsvalue
+# AGENTS.md — webtyp/jsvalue
 
 Working notes for AI agents operating in this library. For end-user docs see [README.md](README.md).
 Plans for code changes live in [docs/PLAN.md](docs/PLAN.md) and link back here for the standing
@@ -6,11 +6,11 @@ rules below (do not duplicate them in plans).
 
 ## Mission
 
-`tinywasm/jsvalue` is the **Go ↔ JavaScript value bridge** for TinyGo WASM (over `syscall/js`).
+`webtyp/jsvalue` is the **Go ↔ JavaScript value bridge** for TinyGo WASM (over `syscall/js`).
 It converts Go values to/from `js.Value`: `ToJS`, `ToGo`, `ScanValue`, `ToAny`, plus
 `Uint8ArrayClass`. It is the thin boundary used by `goflare/d1`, `indexdb`,
 etc. Blocking a goroutine on a Promise or a JS event is **out of scope** — it
-lives in `github.com/tinywasm/await`; do not reintroduce it here.
+lives in `webtyp.com/await`; do not reintroduce it here.
 
 ## Ecosystem restrictions (do NOT violate)
 
@@ -22,7 +22,7 @@ lives in `github.com/tinywasm/await`; do not reintroduce it here.
   reflection. This is the single biggest size lever in the edge worker.
 - **No `map`.** TinyGo pulls in the hashmap runtime, inflating the binary. No `map[...]...` in
   conversion paths (incl. `ToAny` for objects → return the `js.Value`, not a `map`).
-- **No standard library for strings/errors.** Use `github.com/tinywasm/fmt` (`fmt.Err`,
+- **No standard library for strings/errors.** Use `webtyp.com/fmt` (`fmt.Err`,
   `fmt.Errf`, `fmt.Convert`, ...). `syscall/js` is the only heavy import allowed (it is the JS
   boundary itself).
 - **0-allocation on the Go side** of the conversion path (reuse writer/reader state). Creating
@@ -33,7 +33,7 @@ lives in `github.com/tinywasm/await`; do not reintroduce it here.
 
 ## Serialization codec (target contract)
 
-Struct/slice conversion uses the typed visitor codec from `tinywasm/fmt`
+Struct/slice conversion uses the typed visitor codec from `webtyp/fmt`
 (`FieldWriter`/`FieldReader` + `Encodable`/`Decodable`): typed calls, no `any`, no `map`, no
 `reflect`. `jsvalue` implements the concrete `js.Value` writer/reader. See `docs/PLAN.md` and
 `../fmt/docs/CODEC_AND_FIELDER.md`.
@@ -41,7 +41,7 @@ Struct/slice conversion uses the typed visitor codec from `tinywasm/fmt`
 ## Testing
 
 ```bash
-go install github.com/tinywasm/devflow/cmd/gotest@latest   # once
+go install webtyp.com/devflow/cmd/gotest@latest   # once
 gotest            # runs the WASM tests (NOT `go test`)
 ```
 
@@ -57,5 +57,5 @@ gopush 'message'   # tests + tag + push + dependency bumps (NOT git commit/push 
 
 ## Related
 
-- [`tinywasm/fmt`](https://github.com/tinywasm/fmt) — the codec contract + `CODEC_AND_FIELDER.md`.
-- [`tinywasm/goflare`](https://github.com/tinywasm/goflare) — `d1` uses `jsvalue.ScanValue`.
+- [`webtyp/fmt`](https://github.com/webtyp/fmt) — the codec contract + `CODEC_AND_FIELDER.md`.
+- [`webtyp/goflare`](https://github.com/webtyp/goflare) — `d1` uses `jsvalue.ScanValue`.
